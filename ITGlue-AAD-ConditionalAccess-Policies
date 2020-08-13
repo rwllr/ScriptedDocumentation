@@ -1,0 +1,376 @@
+######### Secrets #########
+$ApplicationId = 'AppID'
+$ApplicationSecret = 'AppSecret'
+$TenantID = 'TenantID'
+$RefreshToken = 'LongRefreshToken'
+$ExchangeRefreshToken = 'LongExchangeToken'
+$UPN = "UPN-Used-To-Generate-Tokens"
+
+########################## IT-Glue ############################
+$APIKEy = "API key goes here"
+$APIEndpoint = "https://api.eu.itglue.com"
+$FlexAssetName = "O365 Conditional Access Policies"
+$Description = "Conditional Access v1."
+
+#Grabbing ITGlue Module and installing.
+If (Get-Module -ListAvailable -Name "ITGlueAPI") { 
+    Import-module ITGlueAPI 
+}
+Else { 
+    Install-Module ITGlueAPI -Force
+    Import-Module ITGlueAPI
+}
+#Settings IT-Glue logon information
+Add-ITGlueBaseURI -base_uri $APIEndpoint
+Add-ITGlueAPIKey $APIKEy
+  
+ 
+install-module SecureScore
+install-module PsWriteHTML
+ 
+
+########################## Helper Functions ############################
+# Helper functions and Conditional Access object logic come from Vasil Michev
+# https://www.michev.info/Blog/Post/3004/reporting-on-conditional-access-policies-in-microsoft-365
+
+########################## User GUID Converter ############################
+function GUIDtoIdentifier ([GUID]$GUID) {
+
+    #Only supports User, Groups,Roles
+    #Does NOT support applicaitons, named locations
+    $Json = @{
+        "ids" = @("$GUID")
+    } | ConvertTo-Json
+
+    #$Json | Out-Default
+    
+    #$GObject = Invoke-WebRequest -Headers $AuthHeader1 -Uri "https://graph.microsoft.com/v1.0/directoryObjects/getByIds" -Method Post -Body $Json -ContentType "application/json"
+    $result = (Invoke-RestMethod -Uri "https://graph.microsoft.com/v1.0/directoryObjects/getByIds" -Headers $Headers -Method Post -Body $Json -ContentType "application/json").value
+
+    #$result | Out-Default
+
+    switch ($result.'@odata.type') {
+        "#microsoft.graph.user" { return $result.UserPrincipalName }
+        "#microsoft.graph.group" { return $result.displayName }
+        "#microsoft.graph.directoryRole" { return $result.displayName }
+        default { return $GUID.Guid }
+    }
+}
+
+function ReturnIdentifiers ([string[]]$GUIDs) {
+    $id = @()
+
+    foreach ($GUID in $GUIDs) {
+        try { [GUID]$GUID | Out-Null ; $id += GUIDtoIdentifier $GUID }
+        catch { return $GUID }
+    }
+
+    return ($id -join ",")
+}
+
+########################## Location GUID Converter ############################
+
+function ReturnLocationIdentifiers ([string[]]$GUIDs) {
+    $id = @()
+
+    foreach ($GUID in $GUIDs) {
+        try { [GUID]$GUID | Out-Null ; $id += LocationGUIDtoIdentifier $GUID }
+        catch { return $GUID }
+    }
+
+    return ($id -join ",")
+}
+function LocationGUIDtoIdentifier ([GUID]$GUID) {
+    #Only supports named locations 
+    $result = (Invoke-RestMethod -Uri "https://graph.microsoft.com/v1.0/identity/conditionalAccess/namedLocations/$GUID/" -Headers $Headers -Method Get -ContentType "application/json")
+    return $result.displayName
+}
+
+# Transpose-Object function comes from PSGallery
+# https://github.com/MScholtes/TechNet-Gallery/tree/master/Transpose-Object
+function Transpose-Object
+{ [CmdletBinding()]
+  Param([OBJECT][Parameter(ValueFromPipeline = $TRUE)]$InputObject)
+
+  BEGIN
+  { # initialize variables just to be "clean"
+    $Props = @()
+    $PropNames = @()
+    $InstanceNames = @()
+  }
+
+  PROCESS
+  {
+  	if ($Props.Length -eq 0)
+  	{ # when first object in pipeline arrives retrieve its property names
+			$PropNames = $InputObject.PSObject.Properties | Select-Object -ExpandProperty Name
+			# and create a PSCustomobject in an array for each property
+			$InputObject.PSObject.Properties | %{ $Props += New-Object -TypeName PSObject -Property @{Property = $_.Name} }
+		}
+
+ 		if ($InputObject.Name)
+ 		{ # does object have a "Name" property?
+ 			$Property = $InputObject.Name
+ 		} else { # no, take object itself as property name
+ 			$Property = $InputObject | Out-String
+		}
+
+ 		if ($InstanceNames -contains $Property)
+ 		{ # does multiple occurence of name exist?
+  		$COUNTER = 0
+ 			do { # yes, append a number in brackets to name
+ 				$COUNTER++
+ 				$Property = "$($InputObject.Name) ({0})" -f $COUNTER
+ 			} while ($InstanceNames -contains $Property)
+ 		}
+ 		# add current name to name list for next name check
+ 		$InstanceNames += $Property
+
+  	# retrieve property values and add them to the property's PSCustomobject
+  	$COUNTER = 0
+  	$PropNames | %{
+  		if ($InputObject.($_))
+  		{ # property exists for current object
+  			$Props[$COUNTER] | Add-Member -Name $Property -Type NoteProperty -Value $InputObject.($_)
+  		} else { # property does not exist for current object, add $NULL value
+  			$Props[$COUNTER] | Add-Member -Name $Property -Type NoteProperty -Value $NULL
+  		}
+ 			$COUNTER++
+  	}
+  }
+
+  END
+  {
+  	# return collection of PSCustomobjects with property values
+  	$Props
+  }
+}
+
+########################## IT-Glue Flexible Asset Creation ############################
+write-host "Checking if Flexible Asset exists in IT-Glue." -foregroundColor green
+$FilterID = (Get-ITGlueFlexibleAssetTypes -filter_name $FlexAssetName).data
+if (!$FilterID) { 
+    write-host "Does not exist, creating new." -foregroundColor green
+    $NewFlexAssetData = 
+    @{
+        type          = 'flexible-asset-types'
+        attributes    = @{
+            name        = $FlexAssetName
+            icon        = 'sitemap'
+            description = $description
+        }
+        relationships = @{
+            "flexible-asset-fields" = @{
+                data = @(
+                    @{
+                        type       = "flexible_asset_fields"
+                        attributes = @{
+                            order           = 1
+                            name            = "Default Domain Name"
+                            kind            = "Text"
+                            required        = $true
+                            "show-in-list"  = $true
+                            "use-for-title" = $true
+                        }
+                    },
+                    @{
+                        type       = "flexible_asset_fields"
+                        attributes = @{
+                            order          = 2
+                            name           = "TenantID"
+                            kind           = "Text"
+                            required       = $false
+                            "show-in-list" = $false
+                        }
+                    },
+                    @{
+                        type       = "flexible_asset_fields"
+                        attributes = @{
+                            order          = 3
+                            name           = "Security Defaults Enabled"
+                            kind           = "Checkbox"
+                            required       = $false
+                            "show-in-list" = $false
+                        }
+                    },
+                    @{
+                        type       = "flexible_asset_fields"
+                        attributes = @{
+                            order          = 4
+                            name           = "Policy Details"
+                            kind           = "Textbox"
+                            required       = $false
+                            "show-in-list" = $true
+                        }
+                    }
+ 
+                )
+            }
+        }
+    }
+    New-ITGlueFlexibleAssetTypes -Data $NewFlexAssetData
+    $FilterID = (Get-ITGlueFlexibleAssetTypes -filter_name $FlexAssetName).data
+}
+  
+write-host "Getting IT-Glue contact list" -ForegroundColor Green
+$i = 0
+$AllITGlueContacts = do {
+    $Contacts = (Get-ITGlueContacts -page_size 1000 -page_number $i).data.attributes
+    $i++
+    $Contacts
+    Write-Host "Retrieved $($Contacts.count) Contacts" -ForegroundColor Yellow
+}while ($Contacts.count % 1000 -eq 0 -and $Contacts.count -ne 0) 
+   
+write-host "Generating unique ID List" -ForegroundColor Green
+ 
+$DomainList = foreach ($Contact in $AllITGlueContacts) {
+    $ITGDomain = ($contact.'contact-emails'.value -split "@")[1]
+    [PSCustomObject]@{
+        Domain   = $ITGDomain
+        OrgID    = $Contact.'organization-id'
+        Combined = "$($ITGDomain)$($Contact.'organization-id')"
+    }
+} 
+
+write-host "Creating credentials and tokens." -ForegroundColor Green
+  
+$credential = New-Object System.Management.Automation.PSCredential($ApplicationId, ($ApplicationSecret | Convertto-SecureString -AsPlainText -Force))
+$aadGraphToken = New-PartnerAccessToken -ApplicationId $ApplicationId -Credential $credential -RefreshToken $refreshToken -Scopes 'https://graph.windows.net/.default' -ServicePrincipal
+$graphToken = New-PartnerAccessToken -ApplicationId $ApplicationId -Credential $credential -RefreshToken $refreshToken -Scopes 'https://graph.microsoft.com/.default' -ServicePrincipal
+  
+write-host "Creating body to request Graph access for each client." -ForegroundColor Green
+$body = @{
+    'resource'      = 'https://graph.microsoft.com'
+    'client_id'     = $ApplicationId
+    'client_secret' = $ApplicationSecret
+    'grant_type'    = "client_credentials"
+    'scope'         = "openid"
+}
+  
+
+write-host "Connecting to Office365 to get all tenants." -ForegroundColor Green
+Connect-MsolService -AdGraphAccessToken $aadGraphToken.AccessToken -MsGraphAccessToken $graphToken.AccessToken
+$customers = Get-MsolPartnerContract -All
+foreach ($Customer in $Customers) {
+    write-host "Grabbing domains for client $($Customer.name)." -ForegroundColor Green
+    $CustomerDomains = Get-MsolDomain -TenantId $Customer.TenantId
+    write-host "Finding possible organisation IDs" -ForegroundColor Green
+    $orgid = foreach ($customerDomain in $customerdomains) {
+        ($domainList | Where-Object { $_.domain -eq $customerDomain.name }).'OrgID' | Select-Object -Unique
+    }
+    write-host "Documenting in the following organizations." -ForegroundColor Green
+    $ClientToken = Invoke-RestMethod -Method post -Uri "https://login.microsoftonline.com/$($customer.tenantid)/oauth2/token" -Body $body -ErrorAction Stop
+    $headers = @{ "Authorization" = "Bearer $($ClientToken.access_token)" }
+    write-host "Starting documentation process for $($customer.name)." -ForegroundColor Green
+    
+
+$security_defaults = (Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/policies/identitySecurityDefaultsEnforcementPolicy/" -Headers $Headers -Method Get -ContentType "application/json").value
+
+
+if (!$security_defaults.isEnabled) {
+    Write-Host "Security Defaults disabled. Grabbing all Conditional Access Policies" -ForegroundColor Green
+
+    $ca_policies = (Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/identity/conditionalAccess/policies/" -Headers $Headers -Method Get -ContentType "application/json").value
+
+
+    $output = @();
+    if ($ca_policies) {    
+    
+        foreach ($ca_policy in $ca_policies) {
+                $CAinfo = New-Object PSObject
+                $CAinfo | Add-Member -MemberType NoteProperty -Name Name -Value $ca_policy.displayName
+                $CAinfo | Add-Member -MemberType NoteProperty -Name Id -Value $ca_policy.id
+                $CAinfo | Add-Member -MemberType NoteProperty -Name State -Value $ca_policy.state
+                $CAinfo | Add-Member -MemberType NoteProperty -Name Created -Value $ca_policy.createdDateTime
+                $CAinfo | Add-Member -MemberType NoteProperty -Name Modified -Value $ca_policy.modifiedDateTime
+
+                #conditions
+                $CAinfo | Add-Member -MemberType NoteProperty -Name cRiskLevel -Value ($ca_policy.conditions.signInRiskLevels -join ";")
+                $CAinfo | Add-Member -MemberType NoteProperty -Name cClientApp -Value ($ca_policy.conditions.clientAppTypes -join ";")
+                $CAinfo | Add-Member -MemberType NoteProperty -Name cDeviceState -Value ($ca_policy.conditions.deviceStates -join ";")
+                $CAinfo | Add-Member -MemberType NoteProperty -Name cApplications -Value ("Included: $($ca_policy.conditions.applications.includeApplications -join ',')" + ";Excluded: $($ca_policy.conditions.applications.excludeApplications -join ',')" + ";Actions: $($ca_policy.conditions.applications.includeUserActions -join ',')")
+                $CAinfo | Add-Member -MemberType NoteProperty -Name "Users Included" -Value (ReturnIdentifiers $ca_policy.conditions.users.includeUsers)
+                $CAinfo | Add-Member -MemberType NoteProperty -Name "Users Excluded" -Value (ReturnIdentifiers $ca_policy.conditions.users.excludeUsers)
+                $CAinfo | Add-Member -MemberType NoteProperty -Name "Groups Included" -Value (ReturnIdentifiers $ca_policy.conditions.users.includeGroups)
+                $CAinfo | Add-Member -MemberType NoteProperty -Name "Groups Excluded" -Value (ReturnIdentifiers $ca_policy.conditions.users.excludeGroups)
+                $CAinfo | Add-Member -MemberType NoteProperty -Name cRoles -Value ("Included: $(ReturnIdentifiers $ca_policy.conditions.users.includeRoles)" + ";Excluded: $(ReturnIdentifiers $ca_policy.conditions.users.excludeRoles)")
+                $CAinfo | Add-Member -MemberType NoteProperty -Name cPlatforms -Value ("Included: $($ca_policy.conditions.platforms.includePlatforms -join ',')" + ";Excluded: $($ca_policy.conditions.platforms.excludePlatforms -join ',')")
+                $CAinfo | Add-Member -MemberType NoteProperty -Name "Locations Included" -Value (ReturnLocationIdentifiers $ca_policy.conditions.locations.includeLocations -join ',')
+                $CAinfo | Add-Member -MemberType NoteProperty -Name "Locations Excluded" -Value (ReturnLocationIdentifiers $ca_policy.conditions.locations.excludeLocations -join ',')
+
+                #conrtos
+                if ($ca_policy.grantControls) {
+                    $CAinfo | Add-Member -MemberType NoteProperty -Name aActions -Value ($ca_policy.grantControls.builtInControls -join ";")
+                    $CAinfo | Add-Member -MemberType NoteProperty -Name aToU -Value ($ca_policy.grantControls.termsOfUse -join ";")
+                    $CAinfo | Add-Member -MemberType NoteProperty -Name aCustom -Value ($ca_policy.grantControls.customAuthenticationFactors -join ";")
+                    $CAinfo | Add-Member -MemberType NoteProperty -Name aOperator -Value $ca_policy.grantControls.operator
+                }
+
+                #session controls
+                if ($ca_policy.sessionControls) {
+                    $CAinfo | Add-Member -MemberType NoteProperty -Name sesRestriction -Value (&{If($ca_policy.sessionControls.applicationEnforcedRestrictions.isEnabled) {"Enabled"} Else {"Not enabled"}}) 
+                    $CAinfo | Add-Member -MemberType NoteProperty -Name sesMCAS -Value $ca_policy.sessionControls.cloudAppSecurity
+                    $CAinfo | Add-Member -MemberType NoteProperty -Name sesBrowser -Value $ca_policy.sessionControls.persistentBrowser
+                    $CAinfo | Add-Member -MemberType NoteProperty -Name sesSignInFrequency -Value (&{If($ca_policy.sessionControls.signInFrequency.value) {"Enabled"} Else {"Not enabled"}})
+                    if ($ca_policy.sessionControls.signInFrequency.value) { $CAinfo | Add-Member -MemberType NoteProperty -Name sesSignInFrequencyPeriod -Value "$($ca_policy.sessionControls.signInFrequency.value) $($ca_policy.sessionControls.signInFrequency.type)" }
+                }
+                $output += $CAinfo
+            }
+        }
+        else {
+            Write-Host "No Conditional Access Policies either. Go sort yourself out." -ForegroundColor Green
+        }
+
+}
+    $FlexAssetBody = 
+    @{
+        type       = "flexible-assets"
+        attributes = @{
+            traits = @{
+                "default-domain-name"       = $customer.DefaultDomainName
+                "tenantid"                  = $customer.TenantId
+                "security-defaults-enabled" = $security_defaults.isEnabled
+                "policy-details"            = ($output | Transpose-Object | convertto-html -Fragment | out-string) -replace "<th>", "<th style=`"background-color:#4CAF50`">"  -replace ";", "<br>" -replace ",", "<br>"
+
+
+            }
+        }
+    }
+
+
+
+write-output "             Finding $($customer.Name) in IT-Glue"
+ 
+$Domains = (Get-MsolDomain -TenantId $customer.TenantID).name
+$ORGId = foreach ($Domain in $Domains) {
+    ($domainList | Where-Object { $_.domain -eq $Domain }).'OrgID' | Select-Object -Unique
+}
+write-output "             Uploading CA Policy $($ca_policy.displayName) for $($customer.Name) into IT-Glue"
+    foreach ($org in $orgID) {
+    $ExistingFlexAsset = (Get-ITGlueFlexibleAssets -filter_flexible_asset_type_id $FilterID.id -filter_organization_id $org).data | Where-Object { $_.attributes.traits.tenantid -eq $customer.TenantId }
+    #If the Asset does not exist, we edit the body to be in the form of a new asset, if not, we just upload.
+    if (!$ExistingFlexAsset) {
+        if ($FlexAssetBody.attributes.'organization-id') {
+            $FlexAssetBody.attributes.'organization-id' = $org
+        }
+        else { 
+            $FlexAssetBody.attributes.add('organization-id', $org)
+            $FlexAssetBody.attributes.add('flexible-asset-type-id', $FilterID.id)
+        }
+        write-output "                      Creating new Conditional Access Policy summary for $($customer.Name) into IT-Glue organisation $org"
+        New-ITGlueFlexibleAssets -data $FlexAssetBody
+
+    }
+    else {
+        #Compare-Object $ExistingFlexAsset.attributes.traits $FlexAssetBody.attributes.traits -Property 'policy-details', 'security-defaults-enabled' | Format-Table 
+        if (!($ExistingFlexAsset.attributes.traits.'policy-details' -contains $FlexAssetBody.attributes.traits.'policy-details'))
+            { write-output "                      Conditional Access Policy has changed. Uploading summary for $($customer.Name) into IT-Glue organisation $org"
+            $ExistingFlexAsset = $ExistingFlexAsset | select-object -Last 1
+            Set-ITGlueFlexibleAssets -id $ExistingFlexAsset.id  -data $FlexAssetBody }
+        else { write-output "                      Conditional Access Policy summary is unchanged for $($customer.Name)"}
+    }
+
+}
+
+
+}
