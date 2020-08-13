@@ -180,7 +180,7 @@ if (!$FilterID) {
                             name           = "TenantID"
                             kind           = "Text"
                             required       = $false
-                            "show-in-list" = $false
+                            "show-in-list" = $true
                         }
                     },
                     @{
@@ -190,7 +190,7 @@ if (!$FilterID) {
                             name           = "Security Defaults Enabled"
                             kind           = "Checkbox"
                             required       = $false
-                            "show-in-list" = $false
+                            "show-in-list" = $true
                         }
                     },
                     @{
@@ -200,7 +200,7 @@ if (!$FilterID) {
                             name           = "Policy Details"
                             kind           = "Textbox"
                             required       = $false
-                            "show-in-list" = $true
+                            "show-in-list" = $false
                         }
                     }
  
