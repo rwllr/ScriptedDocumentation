@@ -1,13 +1,13 @@
 ######### Secrets #########
-$ApplicationId = 'AppID'
-$ApplicationSecret = 'AppSecret'
-$TenantID = 'TenantID'
-$RefreshToken = 'LongRefreshToken'
-$ExchangeRefreshToken = 'LongExchangeToken'
-$UPN = "UPN-Used-To-Generate-Tokens"
+$ApplicationId = (Get-AzKeyVaultSecret -VaultName $env:keyVaultName -SecretName 'applicationID').SecretValueText
+$ApplicationSecret = (Get-AzKeyVaultSecret -VaultName $env:keyVaultName -SecretName 'applicationSecret').SecretValue #This is returned as a secure string 
+$TenantID = (Get-AzKeyVaultSecret -VaultName $env:keyVaultName -SecretName 'TenantID').SecretValueText
+$RefreshToken = (Get-AzKeyVaultSecret -VaultName $env:keyVaultName -SecretName 'LongRefreshToken').SecretValueText
+$ExchangeRefreshToken = (Get-AzKeyVaultSecret -VaultName $env:keyVaultName -SecretName 'LongExchangeToken').SecretValueText
+$UPN = (Get-AzKeyVaultSecret -VaultName $env:keyVaultName -SecretName 'TokenUPN').SecretValueText
 
 ########################## IT-Glue ############################
-$APIKEy = "API key goes here"
+$APIKEy = (Get-AzKeyVaultSecret -VaultName $env:keyVaultName -SecretName 'ITGlueAPIKey').SecretValueText
 $APIEndpoint = "https://api.eu.itglue.com"
 $FlexAssetName = "O365 Conditional Access Policies"
 $Description = "Conditional Access v1."
@@ -274,53 +274,36 @@ if (!$security_defaults.isEnabled) {
 
 
     $output = @();
-    if ($ca_policies) {    
-    
-        foreach ($ca_policy in $ca_policies) {
-                $CAinfo = New-Object PSObject
-                $CAinfo | Add-Member -MemberType NoteProperty -Name Name -Value $ca_policy.displayName
-                $CAinfo | Add-Member -MemberType NoteProperty -Name Id -Value $ca_policy.id
-                $CAinfo | Add-Member -MemberType NoteProperty -Name State -Value $ca_policy.state
-                $CAinfo | Add-Member -MemberType NoteProperty -Name Created -Value $ca_policy.createdDateTime
-                $CAinfo | Add-Member -MemberType NoteProperty -Name Modified -Value $ca_policy.modifiedDateTime
-
-                #conditions
-                $CAinfo | Add-Member -MemberType NoteProperty -Name cRiskLevel -Value ($ca_policy.conditions.signInRiskLevels -join ";")
-                $CAinfo | Add-Member -MemberType NoteProperty -Name cClientApp -Value ($ca_policy.conditions.clientAppTypes -join ";")
-                $CAinfo | Add-Member -MemberType NoteProperty -Name cDeviceState -Value ($ca_policy.conditions.deviceStates -join ";")
-                $CAinfo | Add-Member -MemberType NoteProperty -Name cApplications -Value ("Included: $($ca_policy.conditions.applications.includeApplications -join ',')" + ";Excluded: $($ca_policy.conditions.applications.excludeApplications -join ',')" + ";Actions: $($ca_policy.conditions.applications.includeUserActions -join ',')")
-                $CAinfo | Add-Member -MemberType NoteProperty -Name "Users Included" -Value (ReturnIdentifiers $ca_policy.conditions.users.includeUsers)
-                $CAinfo | Add-Member -MemberType NoteProperty -Name "Users Excluded" -Value (ReturnIdentifiers $ca_policy.conditions.users.excludeUsers)
-                $CAinfo | Add-Member -MemberType NoteProperty -Name "Groups Included" -Value (ReturnIdentifiers $ca_policy.conditions.users.includeGroups)
-                $CAinfo | Add-Member -MemberType NoteProperty -Name "Groups Excluded" -Value (ReturnIdentifiers $ca_policy.conditions.users.excludeGroups)
-                $CAinfo | Add-Member -MemberType NoteProperty -Name cRoles -Value ("Included: $(ReturnIdentifiers $ca_policy.conditions.users.includeRoles)" + ";Excluded: $(ReturnIdentifiers $ca_policy.conditions.users.excludeRoles)")
-                $CAinfo | Add-Member -MemberType NoteProperty -Name cPlatforms -Value ("Included: $($ca_policy.conditions.platforms.includePlatforms -join ',')" + ";Excluded: $($ca_policy.conditions.platforms.excludePlatforms -join ',')")
-                $CAinfo | Add-Member -MemberType NoteProperty -Name "Locations Included" -Value (ReturnLocationIdentifiers $ca_policy.conditions.locations.includeLocations -join ',')
-                $CAinfo | Add-Member -MemberType NoteProperty -Name "Locations Excluded" -Value (ReturnLocationIdentifiers $ca_policy.conditions.locations.excludeLocations -join ',')
-
-                #conrtos
-                if ($ca_policy.grantControls) {
-                    $CAinfo | Add-Member -MemberType NoteProperty -Name aActions -Value ($ca_policy.grantControls.builtInControls -join ";")
-                    $CAinfo | Add-Member -MemberType NoteProperty -Name aToU -Value ($ca_policy.grantControls.termsOfUse -join ";")
-                    $CAinfo | Add-Member -MemberType NoteProperty -Name aCustom -Value ($ca_policy.grantControls.customAuthenticationFactors -join ";")
-                    $CAinfo | Add-Member -MemberType NoteProperty -Name aOperator -Value $ca_policy.grantControls.operator
-                }
-
-                #session controls
-                if ($ca_policy.sessionControls) {
-                    $CAinfo | Add-Member -MemberType NoteProperty -Name sesRestriction -Value (&{If($ca_policy.sessionControls.applicationEnforcedRestrictions.isEnabled) {"Enabled"} Else {"Not enabled"}}) 
-                    $CAinfo | Add-Member -MemberType NoteProperty -Name sesMCAS -Value $ca_policy.sessionControls.cloudAppSecurity
-                    $CAinfo | Add-Member -MemberType NoteProperty -Name sesBrowser -Value $ca_policy.sessionControls.persistentBrowser
-                    $CAinfo | Add-Member -MemberType NoteProperty -Name sesSignInFrequency -Value (&{If($ca_policy.sessionControls.signInFrequency.value) {"Enabled"} Else {"Not enabled"}})
-                    if ($ca_policy.sessionControls.signInFrequency.value) { $CAinfo | Add-Member -MemberType NoteProperty -Name sesSignInFrequencyPeriod -Value "$($ca_policy.sessionControls.signInFrequency.value) $($ca_policy.sessionControls.signInFrequency.type)" }
-                }
-                $output += $CAinfo
+        $output = foreach ($ca_policy in $ca_policies) {
+            [PSCustomObject]@{
+                Name                 = $ca_policy.displayName
+                ID                   = $ca_policy.id
+                State                = $ca_policy.state
+                Created              = $ca_policy.createdDateTime
+                Modified             = $ca_policy.modifiedDateTime
+                cRiskLevel           = ($ca_policy.conditions.signInRiskLevels -join ";")
+                cClientApp           = ($ca_policy.conditions.clientAppTypes -join ";")
+                cDeviceState         = ($ca_policy.conditions.deviceStates -join ";")
+                cApplications        = ("Included: $($ca_policy.conditions.applications.includeApplications -join ',')" + ";Excluded: $($ca_policy.conditions.applications.excludeApplications -join ',')" + ";Actions: $($ca_policy.conditions.applications.includeUserActions -join ',')")
+                'Users Included'     = (ReturnIdentifiers $ca_policy.conditions.users.includeUsers)
+                'Users Excluded'     = (ReturnIdentifiers $ca_policy.conditions.users.excludeUsers)
+                "Groups Included"    = (ReturnIdentifiers $ca_policy.conditions.users.includeGroups)
+                "Groups excluded"    = (ReturnIdentifiers $ca_policy.conditions.users.excludeGroups)
+                "cRoles"             = ("Included: $(ReturnIdentifiers $ca_policy.conditions.users.includeRoles)" + ";Excluded: $(ReturnIdentifiers $ca_policy.conditions.users.excludeRoles)")
+                "cPlatforms"         = ("Included: $($ca_policy.conditions.platforms.includePlatforms -join ',')" + ";Excluded: $($ca_policy.conditions.platforms.excludePlatforms -join ',')")
+                "Locations Included" = (ReturnLocationIdentifiers $ca_policy.conditions.locations.includeLocations -join ',')
+                "Locations Excluded" = (ReturnLocationIdentifiers $ca_policy.conditions.locations.excludeLocations -join ',')
+                Actions              = ($ca_policy.grantControls.builtInControls -join ";")
+                "Terms of Use"       = ($ca_policy.grantControls.termsOfUse -join ";")
+                "Custom Auth"        = ($ca_policy.grantControls.customAuthenticationFactors -join ";")
+                Operator             = $ca_policy.grantControls.operator
+                sesRestriction       = (&{If($ca_policy.sessionControls.applicationEnforcedRestrictions.isEnabled) {"Enabled"} Else {"Not enabled"}})
+                sesMCAS              = $ca_policy.sessionControls.cloudAppSecurity
+                sesBrowser           = $ca_policy.sessionControls.persistentBrowser
+                sesSignInFrequency   = (&{If($ca_policy.sessionControls.signInFrequency.value) {"Enabled"} Else {"Not enabled"}})
+                sesSignInFrequencyPeriod = "$($ca_policy.sessionControls.signInFrequency.value) $($ca_policy.sessionControls.signInFrequency.type)"
             }
         }
-        else {
-            Write-Host "No Conditional Access Policies either. Go sort yourself out." -ForegroundColor Green
-        }
-
 }
     $FlexAssetBody = 
     @{
